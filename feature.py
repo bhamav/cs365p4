@@ -135,12 +135,13 @@ class OpticalFlow(pipeline.ProcessObject):
     '''
     inputs: [Image, Corners, Ix, Iy, Ixx, Iyy, Ixy]
     '''
-    def __init__(self, input = None, sorted = None, radius = 5):
+    def __init__(self, input = None, sorted = None, radius = 5, iterations=1):
         pipeline.ProcessObject.__init__(self, input, inputCount=7)
         self.prevInpt = None
         self.features = []
         self.frame = 0
         self.radius = radius
+        self.iterations = iterations
         
     def generateData(self):
         inpt = self.getInput(0).getData()
@@ -159,18 +160,27 @@ class OpticalFlow(pipeline.ProcessObject):
             Ixx = self.getInput(4).getData()
             Iyy = self.getInput(5).getData()
             Ixy = self.getInput(6).getData()
-            It = inpt - self.prevInpt
-            Ixt = Ix*It
-            Iyt = Iy*It
-            for i, (y, x, _, _) in enumerate(newFeatures):
-                
+            for i, (y, x, _, a) in enumerate(newFeatures):
+                if a<1:
+                    continue
                 pIxx = Ixx[x-r:x+r,y-r:y+r].sum()
                 pIyy = Iyy[x-r:x+r,y-r:y+r].sum()
                 pIxy = Iyy[x-r:x+r,y-r:y+r].sum()
+                pIx = Ix[x-r:x+r,y-r:y+r]
+                pIy = Iy[x-r:x+r,y-r:y+r]
+                
+                u,v=0,0
                 ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])
-                ATb = numpy.array([Ixt[x-r:x+r,y-r:y+r].sum(), Iyt[x-r:x+r,y-r:y+r].sum()])
-                v = numpy.linalg.solve(ATA, ATb)
-                newFeatures[i][:2]+=v[::-1]
+                for _ in range(self.iterations):
+                    pIt = inpt[x+u-r:x+u+r,y+v-r:y+v+r]-self.prevInpt[x-r:x+r,y-r:y+r]
+                    ATb = numpy.array([(pIt*pIx).sum(), (pIt*pIy).sum()])
+                    u,v = numpy.linalg.solve(ATA, ATb)
+                    x+= u
+                    y+= v
+                newFeatures[i][:2]+=[y,x]
+                if x<0 or y<0 or x>inpt.shape[1] or y>inpt.shape[0]:
+                    newFeatures[i][3] = 0.0
+                    print "deactivating"
             self.prevInpt = inpt
             self.getOutput(0).setData(newFeatures)
         self.frame += 1
@@ -212,15 +222,15 @@ if __name__ == "__main__":
     
     #pipesource = source.CameraCV()
     #pipesource = source.FileReader("test.jpg")
-    files = glob.glob("./images1/*.png")
+    files = glob.glob("./images5/*.npy")
     pipesource = source.FileStackReader(files)
     pipesource.setLoop(True)
     
     grayscale = Grayscale(pipesource.getOutput())
     
     # find harris corners and sorted list'
-    tensor = Tensor(grayscale.getOutput())
-    hc = HarrisCorners()
+    tensor = Tensor(grayscale.getOutput(),sigmaD=2.0, sigmaI=3.0)
+    hc = HarrisCorners(count=128)
     hc.setInput(grayscale.getOutput(0), 0)
     hc.setInput(tensor.getOutput(2), 1)
     hc.setInput(tensor.getOutput(3), 2)
