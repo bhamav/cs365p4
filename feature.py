@@ -160,27 +160,55 @@ class OpticalFlow(pipeline.ProcessObject):
             Ixx = self.getInput(4).getData()
             Iyy = self.getInput(5).getData()
             Ixy = self.getInput(6).getData()
-            for i, (y, x, _, a) in enumerate(newFeatures):
-                if a<1:
+            #for i, (y, x, _, a) in enumerate(newFeatures):
+            #    if a<1:
+            #        continue
+            #    pIxx = Ixx[x-r:x+r,y-r:y+r].sum()
+            #    pIyy = Iyy[x-r:x+r,y-r:y+r].sum()
+            #    pIxy = Iyy[x-r:x+r,y-r:y+r].sum()
+            #    pIx = Ix[x-r:x+r,y-r:y+r]
+            #    pIy = Iy[x-r:x+r,y-r:y+r]
+            #    
+            #    u,v=0,0
+            #    ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])
+            #    for _ in range(self.iterations):
+            #        pIt = inpt[x+u-r:x+u+r,y+v-r:y+v+r]-self.prevInpt[x-r:x+r,y-r:y+r]
+            #        ATb = numpy.array([(pIt*pIx).sum(), (pIt*pIy).sum()])
+            #        u,v = numpy.linalg.solve(ATA, ATb)
+            #        x+= u
+            #        y+= v
+            #    newFeatures[i][:2]+=[y,x]
+            #    if x<0 or y<0 or x>inpt.shape[1] or y>inpt.shape[0]:
+            #        newFeatures[i][3] = 0.0
+            #        print "deactivating"
+            It = inpt - self.prevInpt
+            Ixt = Ix*It
+            Iyt = Iy*It
+            h, w = inpt.shape
+            print h,w
+            for i, (x,y, _, a) in enumerate(newFeatures):
+                if a==0:
                     continue
-                pIxx = Ixx[x-r:x+r,y-r:y+r].sum()
-                pIyy = Iyy[x-r:x+r,y-r:y+r].sum()
-                pIxy = Iyy[x-r:x+r,y-r:y+r].sum()
-                pIx = Ix[x-r:x+r,y-r:y+r]
-                pIy = Iy[x-r:x+r,y-r:y+r]
-                
-                u,v=0,0
+                # g= imgutil.gaussian 
+                # gg = dot(g.transpose, g)
+                # r= g.size/2
+                # iyy, ixx = numpy.mgrid[-r:r+1, -r, r+1]
+                # ryy, rxx = y+iyy, x+ixx
+                # patch0 = interpolation.map_coordinates(I, (ryy, rxx)) # maybe stack these into 2 by n^2 matrix
+                # patch1 = interpolation.map_coordinates(I1, (ryy+u, rxx+v)) # maybe stack these into 2 by n^2 matrix
+                # pIt = patch1-patch0 muliply by pIy and pIx
+                # GIxIt = (patchIt*patchIx*gg.flaten()).sum()
+                print y,x
+                pIxx = Ixx[y,x]
+                pIyy = Iyy[y,x]
+                pIxy = Iyy[y,x]
                 ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])
-                for _ in range(self.iterations):
-                    pIt = inpt[x+u-r:x+u+r,y+v-r:y+v+r]-self.prevInpt[x-r:x+r,y-r:y+r]
-                    ATb = numpy.array([(pIt*pIx).sum(), (pIt*pIy).sum()])
-                    u,v = numpy.linalg.solve(ATA, ATb)
-                    x+= u
-                    y+= v
-                newFeatures[i][:2]+=[y,x]
-                if x<0 or y<0 or x>inpt.shape[1] or y>inpt.shape[0]:
-                    newFeatures[i][3] = 0.0
-                    print "deactivating"
+                ATb = -numpy.array([Ixt[y-r:y+r,x-r:x+r].sum(), Iyt[y-r:y+r,x-r:x+r].sum()])
+                v = numpy.linalg.lstsq(ATA, ATb)[0]
+                newFeatures[i][:2]+=v
+                if newFeatures[i][0]>h or newFeatures[i][1]>w or newFeatures[i][0]<0 or newFeatures[i][1]<0:
+                    newFeatures[i][3]=0.0
+            self.features.append(newFeatures)
             self.prevInpt = inpt
             self.getOutput(0).setData(newFeatures)
         self.frame += 1
