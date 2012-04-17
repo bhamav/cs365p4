@@ -16,41 +16,34 @@ from scipy.spatial import distance
 import imgutil
 import pipeline
 import source
+import glob
 
 
-class HarrisCorners(pipeline.ProcessObject):
-    '''
-    Finds Harris corner features for an input image.
+class Tensor(pipeline.ProcessObject):
+    """
     @image: a 2D grayscale image
     @sigmaD: differentiation scale
     @sigmaI: integration scale
-    @count: number of corners to detect
-    @return: a maxPoints x 3 array, where each row contains the (x, y) 
-    position, and Harris score of a feature point. The array is sorted
-    by decreasing score.
-    '''     
-    
-    def __init__(self, input=None, sigmaD=1.0, sigmaI=1.5, count=512, descending=True):
-        pipeline.ProcessObject.__init__(self, input, outputCount=2)
+    output: [Ix, Iy, Ixx, Iyy, Ixy]
+    """
+    def __init__(self, input=None, sigmaD=1.0, sigmaI=1.5):
+        pipeline.ProcessObject.__init__(self, input, outputCount=5)
         self.sigmaD = sigmaD
         self.sigmaI = sigmaI
-        self.count = count
-        self.descending = descending
-
     def generateData(self):
-        input = self.getInput(0).getData()
+        image = self.getInput(0).getData()
         
-        input = input.astype(numpy.float32)
-        rows, cols = input.shape[:2]
-        
+        image = image.astype(numpy.float32)
+        rows, cols = image.shape[:2]
+    
         # compute derivatives in x
-        Ix = filters.gaussian_filter1d(input, self.sigmaD, 0, 0)
+        Ix = filters.gaussian_filter1d(image, self.sigmaD, 0, 0)
         Ix = filters.gaussian_filter1d(Ix, self.sigmaD, 1, 1)
-        
+    
         # compute derivatives in y
-        Iy = filters.gaussian_filter1d(input, self.sigmaD, 1, 0)
+        Iy = filters.gaussian_filter1d(image, self.sigmaD, 1, 0)
         Iy = filters.gaussian_filter1d(Iy, self.sigmaD, 0, 1)
-        
+    
         # compute components of the structure tensor
         # 2nd derivative in x
         Ixx = filters.gaussian_filter(Ix**2, self.sigmaI, 0)
@@ -59,64 +52,128 @@ class HarrisCorners(pipeline.ProcessObject):
         # IxIy
         Ixy = filters.gaussian_filter(Ix * Iy, self.sigmaI, 0)
         
-        # compute Harris weights
-        #hW = (Ixx * Iyy - Ixy**2) - 0.06*(Ixx + Iyy)
-        hW = (Ixx * Iyy - Ixy**2) / (Ixx + Iyy + 1e-8)
+        self.getOutput(0).setData(Ix)
+        self.getOutput(1).setData(Iy)
+        self.getOutput(2).setData(Ixx)
+        self.getOutput(3).setData(Iyy)
+        self.getOutput(4).setData(Ixy)
+
+class HarrisCorners(pipeline.ProcessObject):
+    '''
+    Finds Harris corner features for an input image.
+    input: [image, Ixx, Iyy, Ixy]
+    @count: number of corners to detect
+    @return: a maxPoints x 3 array, where each row contains the (x, y) 
+    position, and Harris score of a feature point. The array is sorted
+    by decreasing score.
+    '''     
+    
+    def __init__(self, input=None, count=512, interval=-1):
+        pipeline.ProcessObject.__init__(self, input, outputCount=2, inputCount=4)
+        self.count = count
+        self.interval = interval
+        self.frame=-1
+
+    def generateData(self):
+        self.frame += 1
+        if self.frame == 0 or (self.interval > 0 and self.frame%self.interval==0):
         
-        # exclude points near the image border
-        hW[:16, :] = 0
-        hW[-16:, :] = 0
-        hW[:, :16] = 0
-        hW[:, -16:] = 0
-        
-        # non-maximum suppression in 5x5 regions
-        maxH = filters.maximum_filter(hW, (5,5))
-        hW = hW * (hW == maxH)
-        
-        if self.descending:
-            sortIdx = numpy.argsort(input.flatten())[::-1]
-        else:
-            sortIdx = numpy.argsort(input.flatten())
-        sortIdx = sortIdx[:self.count]
-        yy = sortIdx / cols
-        xx = sortIdx % cols
+            image = self.getInput(0).getData()
+            Ixx = self.getInput(1).getData()
+            Iyy = self.getInput(2).getData()
+            Ixy = self.getInput(3).getData()
+
+            image = image.astype(numpy.float32)
+            rows, cols = image.shape[:2]
             
-        # concatenate positions and values
-        xyv = numpy.vstack((xx, yy, input.flatten()[sortIdx])).transpose()
+        
+            # compute Harris weights
+            #hW = (Ixx * Iyy - Ixy**2) - 0.06*(Ixx + Iyy)
+            hW = (Ixx * Iyy - Ixy**2) / (Ixx + Iyy + 1e-8)
+        
+            # exclude points near the image border
+            hW[:16, :] = 0
+            hW[-16:, :] = 0
+            hW[:, :16] = 0
+            hW[:, -16:] = 0
+        
+            # non-maximum suppression in 5x5 regions
+            maxH = filters.maximum_filter(hW, (5,5))
+            hW = hW * (hW == maxH)
+        
+            sortIdx = numpy.argsort(hW.flatten())[::-1]
+            sortIdx = sortIdx[:self.count]
+            yy = sortIdx / cols
+            xx = sortIdx % cols
+            
+            # concatenate positions and values
+            xyv = numpy.vstack((xx, yy, hW.flatten()[sortIdx])).transpose()
                 
-        self.getOutput(0).setData(hW)
-        self.getOutput(1).setData(xyv)
+            self.getOutput(0).setData(hW)
+            self.getOutput(1).setData(xyv)
 
 
 class ShowFeatures(pipeline.ProcessObject):
     '''
     '''
-    def __init__(self, input = None, sorted = None):
+    def __init__(self, input = None):
         pipeline.ProcessObject.__init__(self, input, inputCount=2, outputCount=1)
     
     def generateData(self):
-        input1 = self.getInput(0).getData()
+        input1 = numpy.copy(self.getInput(0).getData())
         input2 = self.getInput(1).getData()
-        
-        for pxy in input2:
-            cv2.rectangle(input1, (int(pxy[0]-5), int(pxy[1]-5)), (int(pxy[0]+5), int(pxy[1]+5)), (0, 0, 255))
-        
+        #print input2[:5]
+        r = 5
+        print input2.shape
+        for x,y in input2[:,:2]:
+            cv2.rectangle(input1, (int(x-r), int(y-r)), (int(x+r), int(y+r)), (255,0,0), thickness=2)
+            #cv2.rectangle(input1, (int(pxy[0]-5), int(pxy[1]-5)), (int(pxy[0]+5), int(pxy[1]+5)), (0, 0, 255))
         self.getOutput(0).setData(input1)
         
         
 class OpticalFlow(pipeline.ProcessObject):
     '''
+    inputs: [Image, Corners, Ix, Iy, Ixx, Iyy, Ixy]
     '''
-    def __init__(self, input = None, sorted = None):
-        pipeline.ProcessObject.__init__(self, input)
-        self.prev = None
+    def __init__(self, input = None, sorted = None, radius = 5):
+        pipeline.ProcessObject.__init__(self, input, inputCount=7)
+        self.prevInpt = None
+        self.features = []
+        self.frame = 0
+        self.radius = radius
         
     def generateData(self):
-        if self.prev == None:
-            self.prev = self.getInput(0).getData()
+        inpt = self.getInput(0).getData()
+        if self.frame == 0:
+            self.prevInpt = inpt
+            hc = self.getInput(1).getData()
+            fts = numpy.ones((hc.shape[0],4), dtype=numpy.float32)
+            fts[:,:3]=hc
+            self.features = [fts]
+            self.getOutput(0).setData(fts)
         else:
-            pass
-    
+            newFeatures = numpy.copy(self.features[-1])
+            r = self.radius
+            Ix  = self.getInput(2).getData()
+            Iy  = self.getInput(3).getData()
+            Ixx = self.getInput(4).getData()
+            Iyy = self.getInput(5).getData()
+            Ixy = self.getInput(6).getData()
+            It = inpt - self.prevInpt
+            Ixt = Ix*It
+            Iyt = Iy*It
+            for i, (y, x, _, _) in enumerate(newFeatures):
+                
+                pIxx = Ixx[x-r:x+r,y-r:y+r].sum()
+                pIyy = Iyy[x-r:x+r,y-r:y+r].sum()
+                pIxy = Iyy[x-r:x+r,y-r:y+r].sum()
+                ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])
+                ATb = numpy.array([Ixt[x-r:x+r,y-r:y+r].sum(), Iyt[x-r:x+r,y-r:y+r].sum()])
+                v = numpy.linalg.solve(ATA, ATb)
+                newFeatures[i][:2]+=v[::-1]
+            self.prevInpt = inpt
+            self.getOutput(0).setData(newFeatures)
+        self.frame += 1
         
         
 class Grayscale(pipeline.ProcessObject):
@@ -129,7 +186,7 @@ class Grayscale(pipeline.ProcessObject):
         
         if input.ndim == 3 and input.shape[2]==3:       
             output = input[...,0]*0.114 + input[...,1]*0.587 + input[...,2]*0.229
-        
+        #output = input[...,1]
         self.getOutput(0).setData(output)
 
 
@@ -153,18 +210,39 @@ class Display(pipeline.ProcessObject):
     
 if __name__ == "__main__":
     
-    pipesource = source.CameraCV()
+    #pipesource = source.CameraCV()
+    #pipesource = source.FileReader("test.jpg")
+    files = glob.glob("./images1/*.png")
+    pipesource = source.FileStackReader(files)
+    pipesource.setLoop(True)
+    
     grayscale = Grayscale(pipesource.getOutput())
     
-    # find harris corners and sorted list
-    hc = HarrisCorners(grayscale.getOutput())
+    # find harris corners and sorted list'
+    tensor = Tensor(grayscale.getOutput())
+    hc = HarrisCorners()
+    hc.setInput(grayscale.getOutput(0), 0)
+    hc.setInput(tensor.getOutput(2), 1)
+    hc.setInput(tensor.getOutput(3), 2)
+    hc.setInput(tensor.getOutput(4), 3)
     
-    # pass in original frame and list of weights
+    of = OpticalFlow()
+    of.setInput(grayscale.getOutput(0), 0)
+    of.setInput(hc.getOutput(1), 1)
+    of.setInput(tensor.getOutput(0), 2)
+    of.setInput(tensor.getOutput(1), 3)
+    of.setInput(tensor.getOutput(2), 4)
+    of.setInput(tensor.getOutput(3), 5)
+    of.setInput(tensor.getOutput(4), 6)
+    
+    
+    
+    # pass in original frame and list of points
     features = ShowFeatures(pipesource.getOutput())
-    features.setInput(hc.getOutput(1),1)
+    features.setInput(of.getOutput(0),1)
     
     # 2 displays
-    display1 = Display(features.getOutput(), "source")
+    display1 = Display(pipesource.getOutput(), "source")
     display2 = Display(features.getOutput(), "features")
 
     key = None
@@ -172,11 +250,13 @@ if __name__ == "__main__":
     t0 = time.time()
     span = 30
     while key != 27:
-        pipesource.updatePlayMode()
- 
+        #pipesource.updatePlayMode()
+        pipesource.increment()
+        
         display1.update()
         display2.update()
-        key = cv2.waitKey(10)
+        of.update()
+        key = cv2.waitKey(100)
         if key >= 0:
             char = chr(key)
             print "Key: ", key, char
@@ -186,70 +266,3 @@ if __name__ == "__main__":
             t1 = time.time()
             print "{0:8.5f} fps".format(span / (t1 - t0))
             t0 = t1
-    
-    
-
-    
-    
-"""
-def harris(image, sigmaD=1.0, sigmaI=1.5, count=512):
-    '''
-    Finds Harris corner features for an input image.  The input image
-    should be a 2D numpy array.  The sigmaD and sigmaI parameters define
-    the differentiation and integration scales (respectively) of the
-    Harris feature detector---the defaults are reasonable for many images.
-    
-    Returns:
-    a maxPoints x 3 array, where each row contains the (x, y) 
-    position, and Harris score of a feature point.  The array is sorted
-    by decreasing score.
-    '''
-    
-    image = image.astype(numpy.float32)
-    h, w = image.shape[0:2]
-    
-    # compute image derivatives
-    Ix = filters.gaussian_filter1d(image, sigmaD, 0, 0)
-    Ix = filters.gaussian_filter1d(Ix, sigmaD, 1, 1)
-    Iy = filters.gaussian_filter1d(image, sigmaD, 1, 0)
-    Iy = filters.gaussian_filter1d(Iy, sigmaD, 0, 1)
-    
-    # compute elements of the structure tensor
-    Ixx = filters.gaussian_filter(Ix**2, sigmaI, 0)
-    Iyy = filters.gaussian_filter(Iy**2, sigmaI, 0)
-    Ixy = filters.gaussian_filter(Ix * Iy, sigmaI, 0)
-    
-    # compute Harris feature strength, avoiding divide by zero
-    imgH = (Ixx * Iyy - Ixy**2) / (Ixx + Iyy + 1e-8)
-        
-    # exclude points near the image border
-    imgH[:16, :] = 0
-    imgH[-16:, :] = 0
-    imgH[:, :16] = 0
-    imgH[:, -16:] = 0
-    
-    # non-maximum suppression in 5x5 regions
-    maxH = filters.maximum_filter(imgH, (5,5))
-    imgH = imgH * (imgH == maxH)
-    
-    # sort points by strength and find their positions
-    sortIdx = numpy.argsort(imgH.flatten())[::-1]
-    sortIdx = sortIdx[:count]
-    yy = sortIdx / w
-    xx = sortIdx % w
-        
-    # concatenate positions and values
-    xyv = numpy.vstack((xx, yy, imgH.flatten()[sortIdx])).transpose()
-    
-    return xyv
-    
-def showHarris(img, harrisCorners):
-        '''
-        Creates boxes around the harrisCorners of an image
-        @img: a cvimg
-        @harrisCorners: an array of harrisCorners
-        '''
-        for pxy in harrisCorners:
-            cv2.rectangle(img, (int(pxy[0]-5), int(pxy[1]-5)), (int(pxy[0]+5), int(pxy[1]+5)), (0, 0, 255))
-    
-"""
