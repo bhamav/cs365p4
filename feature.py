@@ -26,8 +26,8 @@ class Tensor(pipeline.ProcessObject):
 	@sigmaI: integration scale
 	output: [Ix, Iy, Ixx, Iyy, Ixy]
 	"""
-	def __init__(self, input=None, sigmaD=1.0, sigmaI=2.0):
-		pipeline.ProcessObject.__init__(self, input, outputCount=5)
+	def __init__(self, inpt=None, sigmaD=1.0, sigmaI=2.0):
+		pipeline.ProcessObject.__init__(self, inpt, outputCount=5)
 		self.sigmaD = sigmaD
 		self.sigmaI = sigmaI
 		
@@ -68,8 +68,8 @@ class HarrisCorners(pipeline.ProcessObject):
 	by decreasing score.
 	'''     
 	
-	def __init__(self, input=None, count=512, interval=-1):
-		pipeline.ProcessObject.__init__(self, input, outputCount=2, inputCount=4)
+	def __init__(self, inpt=None, count=512, interval=-1):
+		pipeline.ProcessObject.__init__(self, inpt, outputCount=2, inputCount=4)
 		self.count = count
 		self.interval = interval
 		self.frame=-1
@@ -115,8 +115,8 @@ class ShowFeatures(pipeline.ProcessObject):
 	'''
 	Draws boxes around the features in an image
 	'''
-	def __init__(self, input = None):
-		pipeline.ProcessObject.__init__(self, input, inputCount=2, outputCount=1)
+	def __init__(self, inpt = None):
+		pipeline.ProcessObject.__init__(self, inpt, inputCount=2, outputCount=1)
 	
 	def generateData(self):
 		input1 = numpy.copy(self.getInput(0).getData())
@@ -126,21 +126,19 @@ class ShowFeatures(pipeline.ProcessObject):
 			cv2.rectangle(input1, (int(x-r), int(y-r)), (int(x+r), int(y+r)), (255,0,0), thickness=2)
 		self.getOutput(0).setData(input1)
 		
-		print input1.shape
-		imgutil.imageShow(input1, file="images6/"+str(int(time.time()*1000))+".png", flag=True)
-		
 		
 class OpticalFlow(pipeline.ProcessObject):
 	'''
 	inputs: [Image, Corners, Ix, Iy, Ixx, Iyy, Ixy]
 	'''
-	def __init__(self, input = None, sorted = None, radius = 5, iterations=10):
-		pipeline.ProcessObject.__init__(self, input, inputCount=7)
+	def __init__(self, inpt = None, sorted = None, radius = 5, iterations=10, epsilon=float('1.0e-3')):
+		pipeline.ProcessObject.__init__(self, inpt, inputCount=7)
 		self.prevInpt = None
 		self.features = []
 		self.frame = 0
 		self.radius = radius
 		self.iterations = iterations
+		self.epsilon = epsilon**2
 		
 	def generateData(self):
 		print self.frame
@@ -180,7 +178,7 @@ class OpticalFlow(pipeline.ProcessObject):
 				ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])                
 				
 				#change in velocity
-				dv = numpy.array([0.0,0.0])
+				dv = numpy.array([100.0,100.0])
 				
 				g = imgutil.gaussian(2.0)[0]
 				g = g[:,None]
@@ -194,7 +192,7 @@ class OpticalFlow(pipeline.ProcessObject):
 				patchIy = interpolation.map_coordinates(Iy, numpy.array([ryy.flatten(), rxx.flatten()]))
 
 				# ITERATE AND CALCULATE ATb
-				while iter > 0: 
+				while iter > 0 and numpy.dot(dv, dv)>self.epsilon: 
 					patch1 = interpolation.map_coordinates(inpt, numpy.array([ryy.flatten(), rxx.flatten()]))
 					patch0 = interpolation.map_coordinates(self.prevInpt, numpy.array([(ryy-velocity[1]).flatten(), (rxx-velocity[0]).flatten()])) 
 
@@ -208,10 +206,11 @@ class OpticalFlow(pipeline.ProcessObject):
 					# solve ATAv = -ATb
 					ATb = -numpy.array([pIxt, pIyt])
 					dv = numpy.linalg.lstsq(ATA, ATb)[0]
-					
 					# update velocity and iterations
 					velocity += dv
 					iter -= 1
+					if numpy.dot(dv, dv)<self.epsilon or iter==0:
+					    print "stopped after", (self.iterations-iter), "with norm", numpy.dot(dv,dv)**.5
 				
 				# calculate new feature positions
 				newFeatures[i][:2]+= velocity
@@ -231,14 +230,14 @@ class Grayscale(pipeline.ProcessObject):
 	'''
 	Converts an image to grayscale if it has 3 channels
 	'''
-	def __init__(self, input = None):
-		pipeline.ProcessObject.__init__(self, input)
+	def __init__(self, inpt = None):
+		pipeline.ProcessObject.__init__(self, inpt)
 		
 	def generateData(self):
-		input = self.getInput(0).getData()
+		inpt = self.getInput(0).getData()
 		
-		if input.ndim == 3 and input.shape[2]==3:       
-			output = input[...,0]*0.114 + input[...,1]*0.587 + input[...,2]*0.229
+		if inpt.ndim == 3 and inpt.shape[2]==3:       
+			output = inpt[...,0]*0.114 + inpt[...,1]*0.587 + inpt[...,2]*0.229
 
 		self.getOutput(0).setData(output)
 
@@ -246,19 +245,19 @@ class Grayscale(pipeline.ProcessObject):
 class Display(pipeline.ProcessObject):
 	'''
 	'''
-	def __init__(self, input = None, name = "pipeline"):
-		pipeline.ProcessObject.__init__(self, input)
+	def __init__(self, inpt = None, name = "pipeline"):
+		pipeline.ProcessObject.__init__(self, inpt)
 		cv2.namedWindow(name, cv.CV_WINDOW_NORMAL)
 		self.name = name
 		
 	def generateData(self):
-		input = self.getInput(0).getData()
+		inpt = self.getInput(0).getData()
 		
 		# Convert back to OpenCV BGR from RGB
-		if input.ndim == 3 and input.shape[2] == 3:
-			input = input[..., ::-1]
+		if inpt.ndim == 3 and inpt.shape[2] == 3:
+			inpt = inpt[..., ::-1]
 		
-		cv2.imshow(self.name, input.astype(numpy.uint8))
+		cv2.imshow(self.name, inpt.astype(numpy.uint8))
 	
 	
 if __name__ == "__main__":
@@ -267,7 +266,7 @@ if __name__ == "__main__":
 	#pipesource = source.FileReader("test.jpg")
 	files = glob.glob("./images5/*.npy")
 	pipesource = source.FileStackReader(files)
-	pipesource.setLoop(True)
+	pipesource.setLoop(False)
 	
 	# convert image to grayscale
 	grayscale = Grayscale(pipesource.getOutput())
