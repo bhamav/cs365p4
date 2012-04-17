@@ -162,15 +162,29 @@ class OpticalFlow(pipeline.ProcessObject):
             It = inpt - self.prevInpt
             Ixt = Ix*It
             Iyt = Iy*It
-            for i, (y, x, _, _) in enumerate(newFeatures):
-                
-                pIxx = Ixx[x-r:x+r,y-r:y+r].sum()
-                pIyy = Iyy[x-r:x+r,y-r:y+r].sum()
-                pIxy = Iyy[x-r:x+r,y-r:y+r].sum()
+            h, w = inpt.shape
+            for i, (y,x, _, a) in enumerate(newFeatures):
+                if a==0:
+                    continue
+                # g= imgutil.gaussian 
+                # gg = dot(g.transpose, g)
+                # r= g.size/2
+                # iyy, ixx = numpy.mgrid[-r:r+1, -r, r+1]
+                # ryy, rxx = y+iyy, x+ixx
+                # patch0 = interpolation.map_coordinates(I, (ryy, rxx)) # maybe stack these into 2 by n^2 matrix
+                # patch1 = interpolation.map_coordinates(I1, (ryy+u, rxx+v)) # maybe stack these into 2 by n^2 matrix
+                # pIt = patch1-patch0 muliply by pIy and pIx
+                # GIxIt = (patchIt*patchIx*gg.flaten()).sum()
+                pIxx = Ixx[x,y]
+                pIyy = Iyy[x,y]
+                pIxy = Iyy[x,y]
                 ATA = numpy.array([[pIxx, pIxy],[pIxy, pIyy]])
-                ATb = numpy.array([Ixt[x-r:x+r,y-r:y+r].sum(), Iyt[x-r:x+r,y-r:y+r].sum()])
-                v = numpy.linalg.solve(ATA, ATb)
-                newFeatures[i][:2]+=v[::-1]
+                ATb = -numpy.array([Ixt[y-r:y+r,x-r:x+r].sum(), Iyt[y-r:y+r,x-r:x+r].sum()])
+                v = numpy.linalg.lstsq(ATA, ATb)[0]
+                newFeatures[i][:2]+=v
+                if newFeatures[i][0]>h or newFeatures[i][1]>w or newFeatures[i][0]<0 or newFeatures[i][1]<0:
+                    newFeatures[i][3]=0.0
+            self.features.append(newFeatures)
             self.prevInpt = inpt
             self.getOutput(0).setData(newFeatures)
         self.frame += 1
@@ -212,7 +226,7 @@ if __name__ == "__main__":
     
     #pipesource = source.CameraCV()
     #pipesource = source.FileReader("test.jpg")
-    files = glob.glob("./images1/*.png")
+    files = glob.glob("./images5/*.npy")
     pipesource = source.FileStackReader(files)
     pipesource.setLoop(True)
     
