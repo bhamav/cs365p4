@@ -125,7 +125,29 @@ class ShowFeatures(pipeline.ProcessObject):
 		for x,y in input2[:,:2]:
 			cv2.rectangle(input1, (int(x-r), int(y-r)), (int(x+r), int(y+r)), (255,0,0), thickness=2)
 		self.getOutput(0).setData(input1)
+
 		
+class FeatureTracer(pipeline.ProcessObject):	
+	'''
+	Draws the paths in which features are moving
+	'''
+	
+	def __init__(self, inpt = None):
+		pipeline.ProcessObject.__init__(self, inpt, inputCount=2, outputCount=1)
+		self.features = []
+	
+	def generateData(self):
+		input1 = numpy.copy(self.getInput(0).getData()) # the image
+		input2 = self.getInput(1).getData() # most recent feature positions
+		self.features.append(input2)
+		r = 5
+		
+		# creating feature paths
+		for feature in self.features:
+			for x,y in feature[:,:2]:
+				cv2.circle(input1, (int(x), int(y)),2, (255,0,0), thickness=2)
+		self.getOutput(0).setData(input1)
+
 		
 class OpticalFlow(pipeline.ProcessObject):
 	'''
@@ -313,9 +335,14 @@ if __name__ == "__main__":
 	features = ShowFeatures(pipesource.getOutput())
 	features.setInput(of.getOutput(0),1)
 	
+	# feature tracer
+	tracer = FeatureTracer(pipesource.getOutput())
+	tracer.setInput(of.getOutput(0),1)	
+	
 	# 2 displays
 	display1 = Display(pipesource.getOutput(), "source")
 	display2 = Display(features.getOutput(), "features")
+	display3 = Display(tracer.getOutput(), "tracer")
 
 	key = None
 	frame = 0
@@ -327,6 +354,7 @@ if __name__ == "__main__":
 		
 		display1.update()
 		display2.update()
+		display3.update()
 		of.update()
 		key = cv2.waitKey(100)
 		if key >= 0:
