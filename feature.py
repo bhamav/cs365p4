@@ -130,15 +130,22 @@ class ShowFeatures(pipeline.ProcessObject):
 class OpticalFlow(pipeline.ProcessObject):
 	'''
 	inputs: [Image, Corners, Ix, Iy, Ixx, Iyy, Ixy]
+	iterations: The maximum number of iterations to perform in calculating the velocity of a feature
+	epsilon: The tolerance for a change in velocity.
+	sigmaD: sigma to use for calculation of patch size.
+	
+	In calculating the velocity for a feature, we will stop after [iterations] number of iterations,
+	or if the norm of the change in velocity is less than [epsilon]
 	'''
-	def __init__(self, inpt = None, sorted = None, radius = 5, iterations=10, epsilon=float('1.0e-3')):
+	def __init__(self, inpt = None, iterations=10, epsilon=float('1.0e-3'), sigmaD=2.0):
 		pipeline.ProcessObject.__init__(self, inpt, inputCount=7)
 		self.prevInpt = None
-		self.features = []
+		self.baseInpt = None
+		self.patches = None
 		self.frame = 0
-		self.radius = radius
 		self.iterations = iterations
 		self.epsilon = epsilon**2
+		self.sigmaD = sigmaD
 		
 	def generateData(self):
 		print self.frame
@@ -147,14 +154,21 @@ class OpticalFlow(pipeline.ProcessObject):
 		# if we are on the first frame
 		if self.frame == 0:
 			self.prevInpt = inpt
+			
 			hc = self.getInput(1).getData()
+			# Create the features vector for t_0 storing (x,y,confidence, active)
 			fts = numpy.ones((hc.shape[0],4), dtype=numpy.float32)
-			fts[:,:3]=hc
-			self.features = [fts]
+			fts[:,:2]=hc[:,:2] #Copy the x-y positions of features detected by hc to the features vector
+			self.prevFeatures = fts # store it as the first entry in the features array which stores features over time
 			self.getOutput(0).setData(fts)
+			
+			
+			r = numpy.floor(self.sigmaD * 5.0/2)
+			self.patches = numpy.zeros((hc.shape[0], (2*r+1)**2), dtype=numpy.float32)
+			for i, (x,y, _, _) in enumerate(fts):
+			    self.patches[i,...] = inpt[y-r:y+r+1, x-r:x+r+1].flatten()
 		else:
-			newFeatures = numpy.copy(self.features[-1])
-			r = self.radius
+			newFeatures = numpy.copy(self.prevFeatures)
 			Ix  = self.getInput(2).getData()
 			Iy  = self.getInput(3).getData()
 			Ixx = self.getInput(4).getData()
@@ -164,8 +178,8 @@ class OpticalFlow(pipeline.ProcessObject):
 			h, w = inpt.shape
 			velocity = numpy.array([0.0,0.0]) # intial velocity values
 			
-			for i, (x,y, _, a) in enumerate(newFeatures):
-				iter = self.iterations
+			for i, (x,y, s, a) in enumerate(newFeatures):
+				iterations = self.iterations
 				
 				# throw away inactive points
 				if a==0:
@@ -180,11 +194,10 @@ class OpticalFlow(pipeline.ProcessObject):
 				#change in velocity
 				dv = numpy.array([100.0,100.0])
 				
-				g = imgutil.gaussian(2.0)[0]
+				g = imgutil.gaussian(self.sigmaD)[0]
 				g = g[:,None]
 				gg = numpy.dot(g, g.transpose()).flatten()
 				r = g.size/2
-				
 				iyy, ixx = numpy.mgrid[-r:r+1, -r:r+1]
 				ryy, rxx = y+iyy, x+ixx
 				
@@ -192,7 +205,7 @@ class OpticalFlow(pipeline.ProcessObject):
 				patchIy = interpolation.map_coordinates(Iy, numpy.array([ryy.flatten(), rxx.flatten()]))
 
 				# ITERATE AND CALCULATE ATb
-				while iter > 0 and numpy.dot(dv, dv)>self.epsilon: 
+				while iterations > 0 and numpy.dot(dv, dv)>self.epsilon: 
 					patch1 = interpolation.map_coordinates(inpt, numpy.array([ryy.flatten(), rxx.flatten()]))
 					patch0 = interpolation.map_coordinates(self.prevInpt, numpy.array([(ryy-velocity[1]).flatten(), (rxx-velocity[0]).flatten()])) 
 
@@ -208,18 +221,24 @@ class OpticalFlow(pipeline.ProcessObject):
 					dv = numpy.linalg.lstsq(ATA, ATb)[0]
 					# update velocity and iterations
 					velocity += dv
-					iter -= 1
-					if numpy.dot(dv, dv)<self.epsilon or iter==0:
-					    print "stopped after", (self.iterations-iter), "with norm", numpy.dot(dv,dv)**.5
+					iterations -= 1
+					if numpy.dot(dv, dv)<self.epsilon or iterations==0:
+					    print "stopped after", (self.iterations-iterations), "with norm", numpy.dot(dv,dv)**.5
 				
 				# calculate new feature positions
 				newFeatures[i][:2]+= velocity
+				
+				#Compute the similarity between our new feature location and the original feature location
+				
+				#imgutil.imageShow(patch1.reshape(g.size,g.size), "p0")
+				#imgutil.imageShow(self.patches[i], "p1")
+				print imgutil.ncc(patch1, self.patches[i,...])
 				
 				# set feature status (active or inactive)
 				if newFeatures[i][0] > w or newFeatures[i][1] > h or newFeatures[i][0] < 0 or newFeatures[i][1] < 0:
 					newFeatures[i][3] = 0
 			
-			self.features.append(newFeatures)
+			self.prevFeatures = newFeatures
 			self.prevInpt = inpt
 			self.getOutput(0).setData(newFeatures)
 			
