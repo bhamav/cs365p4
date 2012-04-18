@@ -17,6 +17,7 @@ import imgutil
 import pipeline
 import source
 import glob
+import pylab
 
 
 class Tensor(pipeline.ProcessObject):
@@ -244,8 +245,8 @@ class OpticalFlow(pipeline.ProcessObject):
 					# update velocity and iterations
 					velocity += dv
 					iterations -= 1
-					if numpy.dot(dv, dv)<self.epsilon or iterations==0:
-					    print "stopped after", (self.iterations-iterations), "with norm", numpy.dot(dv,dv)**.5
+				
+				#print "stopped after", (self.iterations-iterations), "with norm", numpy.dot(dv,dv)**.5
 				
 				# calculate new feature positions
 				newFeatures[i][:2]+= velocity
@@ -254,7 +255,7 @@ class OpticalFlow(pipeline.ProcessObject):
 				
 				#imgutil.imageShow(patch1.reshape(g.size,g.size), "p0")
 				#imgutil.imageShow(self.patches[i], "p1")
-				print imgutil.ncc(patch1, self.patches[i,...])
+				newFeatures[i][2] = imgutil.ncc(patch1, self.patches[i,...])
 				
 				# set feature status (active or inactive)
 				if newFeatures[i][0] > w or newFeatures[i][1] > h or newFeatures[i][0] < 0 or newFeatures[i][1] < 0:
@@ -299,7 +300,20 @@ class Display(pipeline.ProcessObject):
 			inpt = inpt[..., ::-1]
 		
 		cv2.imshow(self.name, inpt.astype(numpy.uint8))
+
+class ScoreTracker(pipeline.ProcessObject):
+	'''
+	'''
+	def __init__(self, inpt = None):
+		pipeline.ProcessObject.__init__(self, inpt, outputCount=0)
+		self.scores = []
+		
+	def generateData(self):
+		inpt = self.getInput(0).getData()
+		self.scores.append(inpt[:,2])
 	
+	def getScoreData(self):
+	    return numpy.array(self.scores)
 	
 if __name__ == "__main__":
 	
@@ -339,6 +353,8 @@ if __name__ == "__main__":
 	tracer = FeatureTracer(pipesource.getOutput())
 	tracer.setInput(of.getOutput(0),1)	
 	
+	scoretracker = ScoreTracker(of.getOutput(0))
+	
 	# 2 displays
 	display1 = Display(pipesource.getOutput(), "source")
 	display2 = Display(features.getOutput(), "features")
@@ -355,7 +371,7 @@ if __name__ == "__main__":
 		display1.update()
 		display2.update()
 		display3.update()
-		of.update()
+		scoretracker.update()
 		key = cv2.waitKey(100)
 		if key >= 0:
 			char = chr(key)
@@ -366,3 +382,14 @@ if __name__ == "__main__":
 			t1 = time.time()
 			print "{0:8.5f} fps".format(span / (t1 - t0))
 			t0 = t1
+		
+		if pipesource.getIndex() == pipesource.getLength()-1:
+		    break
+	scores = scoretracker.getScoreData().transpose()
+	import pickle
+	import datetime
+	pickle.dump(scores, file("score-data-%s.p"%datetime.datetime.now().strftime("%y-%m-%d-%H.%M.%S"), "w"))
+	for i in range(scores.shape[0]):
+	    plt, = pylab.plot(scores[i,...])
+	pylab.show()
+	    
